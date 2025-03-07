@@ -1,0 +1,106 @@
+from pytorch_tabnet.tab_model import TabNetClassifier
+from sklearn.model_selection import ParameterGrid
+import pandas as pd
+import numpy as np
+import torch
+
+# Assume you have prepared the dataset
+X_train, y_train = ..., ...  # Replace with your training data
+X_valid, y_valid = ..., ...  # Validation dataset
+feature_names = [...]  # List of feature names
+
+# Custom parameters
+ModelName = "TabNet"
+Club = "DataScience"
+MetricMode = "Accuracy"
+
+# Hyperparameter search space
+param_space = {
+    'n_a': [8, 12, 15],
+    'n_d': [8, 12, 15],
+    'n_steps': [3, 6, 9],
+    'gamma': [1.0, 1.3, 1.8],
+    'batch_size': [5120, 10240, 20480]
+}
+
+import itertools
+from datetime import datetime
+
+# Create hyperparameter combinations
+param_combinations = list(itertools.product(param_space['n_a'], param_space['n_steps'], param_space['gamma'], param_space['batch_size']))
+
+# Store feature importance and metrics results
+feature_importance_df_list = []
+metrics_df_list = []
+
+for idx, (n_a, n_steps, gamma, batch_size) in enumerate(param_combinations, start=1):
+    model_desc = f"{n_a}_{n_steps}_{gamma}_{ModelName}_{Club}_{MetricMode}"
+    print(f"\nTraining Progress ({idx}/{len(param_combinations)}): {model_desc}, batch_size={batch_size}")
+
+    # Initialize model
+    model = TabNetClassifier(
+        n_a=n_a,
+        n_d=n_a,
+        n_steps=n_steps,
+        gamma=gamma,
+        optimizer_fn=torch.optim.Adam,
+        optimizer_params=dict(lr=2e-2),
+        verbose=1
+    )
+
+    # Train model
+    start_time = datetime.now()
+    model.fit(
+        X_train=X_train, y_train=y_train,
+        eval_set=[(X_valid, y_valid)],
+        eval_metric=['accuracy'],
+        patience=15,
+        max_epochs=200,
+        batch_size=batch_size
+    )
+    elapsed_time = datetime.now() - start_time
+    print(f"Training Duration: {elapsed_time}")
+
+    # Save model
+    filename = f"{model_desc}"
+    model.save_model(filename)
+    print(f"Model saved to {filename}.zip")
+
+    # Feature Importance
+    importance = model.feature_importances_
+    feature_importance_df = pd.DataFrame({
+        "Model": model_desc,
+        "Feature": feature_names,
+        "Importance": importance
+    })
+    feature_importance_df_list.append(feature_importance_df)
+
+    # Compute Mod_GINI
+    for dataset, (X, y, ind) in [("train", (X_train, y_train, "train")), ("test", (X_valid, y_valid, "test"))]:
+        preds = model.predict_proba(X)[:, 1]
+        total_obs = len(y)
+        actual_event_rate = np.mean(y)
+        pred_event_rate = np.mean(preds)
+        mod_gini = Mod_gini_from_lorenz_binned(actual=y, pred=preds)
+
+        metrics_df = pd.DataFrame({
+            "total_obs": [total_obs],
+            "actual_event_rate": [actual_event_rate],
+            "pred_event_rate": [pred_event_rate],
+            "Mod_GINI": [mod_gini],
+            "ind": [ind],
+            "metric_mode": [MetricMode],
+            "club": [Club],
+            "model": [model_desc]
+        })
+        metrics_df_list.append(metrics_df)
+
+# Save feature importance to CSV
+final_feature_importance_df = pd.concat(feature_importance_df_list, ignore_index=True)
+final_feature_importance_df.to_csv(f"FeatureImportance_{ModelName}_{Club}_{MetricMode}.csv", index=False)
+print("All feature importance results saved!")
+
+# Save metrics results to CSV
+final_metrics_df = pd.concat(metrics_df_list, ignore_index=True)
+final_metrics_df.to_csv(f"Metric_{ModelName}_{Club}_{MetricMode}.csv", index=False)
+print("All model metrics saved!")
